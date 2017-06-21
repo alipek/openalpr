@@ -44,6 +44,8 @@ const std::string WEBCAM_PREFIX = "/dev/video";
 MotionDetector motiondetector;
 bool do_motiondetection = true;
 
+std::vector<int> roiDetection;
+
 /** Function Headers */
 bool detectandshow(Alpr* alpr, cv::Mat frame, std::string region, bool writeJson);
 bool is_supported_image(std::string image_file);
@@ -72,13 +74,14 @@ int main( int argc, const char** argv )
 
   TCLAP::UnlabeledMultiArg<std::string>  fileArg( "image_file", "Image containing license plates", true, "", "image_file_path"  );
 
-  
+
   TCLAP::ValueArg<std::string> countryCodeArg("c","country","Country code to identify (either us for USA or eu for Europe).  Default=us",false, "us" ,"country_code");
   TCLAP::ValueArg<int> seekToMsArg("","seek","Seek to the specified millisecond in a video file. Default=0",false, 0 ,"integer_ms");
   TCLAP::ValueArg<std::string> configFileArg("","config","Path to the openalpr.conf file",false, "" ,"config_file");
   TCLAP::ValueArg<std::string> templatePatternArg("p","pattern","Attempt to match the plate number against a plate pattern (e.g., md for Maryland, ca for California)",false, "" ,"pattern code");
   TCLAP::ValueArg<int> topNArg("n","topn","Max number of possible plate numbers to return.  Default=10",false, 10 ,"topN");
   TCLAP::ValueArg<std::string> saveFramesArg("s","save-frame","Save frames path",false, "" ,"path");
+  TCLAP::MultiArg<int> regionOfInterestArg("r","roi","Set region of interest -r x -r y -r h -r w",false, "type desc");
 
   TCLAP::SwitchArg jsonSwitch("j","json","Output recognition results in JSON format.  Default=off", cmd, false);
   TCLAP::SwitchArg debugSwitch("","debug","Enable debug output.  Default=off", cmd, false);
@@ -95,8 +98,9 @@ int main( int argc, const char** argv )
     cmd.add( fileArg );
     cmd.add( countryCodeArg );
     cmd.add( saveFramesArg );
+    cmd.add( regionOfInterestArg );
 
-    
+
     if (cmd.parse( argc, argv ) == false)
     {
       // Error occurred while parsing.  Exit now.
@@ -116,6 +120,10 @@ int main( int argc, const char** argv )
     measureProcessingTime = clockSwitch.getValue();
 	do_motiondetection = motiondetect.getValue();
     saveFramePath = saveFramesArg.getValue();
+    roiDetection = regionOfInterestArg.getValue();
+    if (roiDetection.size() != 0 && roiDetection.size() != 4) {
+      throw TCLAP::ArgException("Rois must set x,y,w,h");
+    }
   }
   catch (TCLAP::ArgException &e)    // catch any exceptions
   {
@@ -123,12 +131,12 @@ int main( int argc, const char** argv )
     return 1;
   }
 
-  
+
   cv::Mat frame;
 
   Alpr alpr(country, configFile);
   alpr.setTopN(topn);
-  
+
   if (debug_mode)
   {
     alpr.getConfig()->setDebug(true);
@@ -190,13 +198,13 @@ int main( int argc, const char** argv )
     else if (filename == "webcam" || startsWith(filename, WEBCAM_PREFIX))
     {
       int webcamnumber = 0;
-      
+
       // If they supplied "/dev/video[number]" parse the "number" here
       if(startsWith(filename, WEBCAM_PREFIX) && filename.length() > WEBCAM_PREFIX.length())
       {
         webcamnumber = atoi(filename.substr(WEBCAM_PREFIX.length()).c_str());
       }
-      
+
       int framenum = 0;
       cv::VideoCapture cap(webcamnumber);
       if (!cap.isOpened())
@@ -269,7 +277,7 @@ int main( int argc, const char** argv )
           }
           if (!outputJson)
             std::cout << "Frame: " << framenum << std::endl;
-          
+
           if (framenum == 0)
             motiondetector.ResetMotionDetection(&frame);
             frame.copyTo(latestFrameCopy);
@@ -346,8 +354,8 @@ void saveFrame(std::string saveFramePath, int frameNum, cv::Mat frame){
 }
 bool is_supported_image(std::string image_file)
 {
-  return (hasEndingInsensitive(image_file, ".png") || hasEndingInsensitive(image_file, ".jpg") || 
-	  hasEndingInsensitive(image_file, ".tif") || hasEndingInsensitive(image_file, ".bmp") ||  
+  return (hasEndingInsensitive(image_file, ".png") || hasEndingInsensitive(image_file, ".jpg") ||
+	  hasEndingInsensitive(image_file, ".tif") || hasEndingInsensitive(image_file, ".bmp") ||
 	  hasEndingInsensitive(image_file, ".jpeg") || hasEndingInsensitive(image_file, ".gif"));
 }
 
@@ -363,6 +371,12 @@ bool detectandshow( Alpr* alpr, cv::Mat frame, std::string region, bool writeJso
   {
 	  cv::Rect rectan = motiondetector.MotionDetect(&frame);
 	  if (rectan.width>0) regionsOfInterest.push_back(AlprRegionOfInterest(rectan.x, rectan.y, rectan.width, rectan.height));
+  } else if (roiDetection.size() == 4) {
+    int x = roiDetection[0] != 0 ? roiDetection[0] : 0;
+    int y = roiDetection[1] != 0 ? roiDetection[1] : 0;
+    int cols = roiDetection[2] != 0 ? roiDetection[2] : frame.cols - x;
+    int rows = roiDetection[3] != 0 ? roiDetection[3] : frame.rows - y;
+    regionsOfInterest.push_back(AlprRegionOfInterest(x, y, cols, rows));
   }
   else regionsOfInterest.push_back(AlprRegionOfInterest(0, 0, frame.cols, frame.rows));
   AlprResults results;
@@ -373,8 +387,8 @@ bool detectandshow( Alpr* alpr, cv::Mat frame, std::string region, bool writeJso
   double totalProcessingTime = diffclock(startTime, endTime);
   if (measureProcessingTime)
     std::cout << "Total Time to process image: " << totalProcessingTime << "ms." << std::endl;
-  
-  
+
+
   if (writeJson)
   {
     std::cout << alpr->toJson( results ) << std::endl;
@@ -390,17 +404,17 @@ bool detectandshow( Alpr* alpr, cv::Mat frame, std::string region, bool writeJso
 
       if (results.plates[i].regionConfidence > 0)
         std::cout << "State ID: " << results.plates[i].region << " (" << results.plates[i].regionConfidence << "% confidence)" << std::endl;
-      
+
       for (int k = 0; k < results.plates[i].topNPlates.size(); k++)
       {
         // Replace the multiline newline character with a dash
         std::string no_newline = results.plates[i].topNPlates[k].characters;
         std::replace(no_newline.begin(), no_newline.end(), '\n','-');
-        
+
         std::cout << "    - " << no_newline << "\t confidence: " << results.plates[i].topNPlates[k].overall_confidence;
         if (templatePattern.size() > 0 || results.plates[i].regionConfidence > 0)
           std::cout << "\t pattern_match: " << results.plates[i].topNPlates[k].matches_template;
-        
+
         std::cout << std::endl;
       }
     }
