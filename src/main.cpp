@@ -257,7 +257,7 @@ int main( int argc, const char** argv )
                                                        hasEndingInsensitive(filename, ".webm") ||
                                                        hasEndingInsensitive(filename, ".flv") || hasEndingInsensitive(filename, ".mjpg") ||
                                                        hasEndingInsensitive(filename, ".mjpeg") ||
-             hasEndingInsensitive(filename, ".mkv")
+             hasEndingInsensitive(filename, ".mkv") || hasEndingInsensitive(filename, ".dav")
         )
     {
       if (fileExists(filename.c_str()))
